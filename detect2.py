@@ -5,8 +5,18 @@ import dlib
 from datetime import datetime
 import time
 import requests
-
+from keras_vggface.vggface import VGGFace
+from PIL import Image
+from keras_vggface.utils import preprocess_input
+from scipy.spatial.distance import cosine
+from mtcnn.mtcnn import MTCNN
+from matplotlib import pyplot
 class detector:
+    EMBEDDINGS_KEY = 'FaceNet/embeddings.npy'
+    LABELS_KEY = 'FaceNet/labels.npy'
+    FNDetector = MTCNN()
+    FNModel = VGGFace(model='resnet50', include_top=False, input_shape=(224, 224, 3), pooling='avg')
+    labels, embeddings = np.load(LABELS_KEY), np.load(EMBEDDINGS_KEY)
     """Class that runs detections and objects tracking for a frame"""
     trackers = []
     writer   = None
@@ -21,7 +31,7 @@ class detector:
 
     def __init__(self, camName, protocol, model):
         self.fourcc     = cv2.VideoWriter_fourcc(*'avc1')
-        self.net        = cv2.dnn.readNet("yolov4-tiny.weights", "yolov4-tiny.cfg")
+        self.net        = cv2.dnn.readNet("F:\DoAn\Home\SecurityCameraAI\Model\yolov4-tiny.weights", "F:\DoAn\Home\SecurityCameraAI\Model\yolov4-tiny.cfg")
         self.camName    = camName
 
     def updateTrackers(self, frame):
@@ -67,8 +77,6 @@ class detector:
             self.frameNum = 0
 
             detections = self.detectObjectsYolo(frame)
-
-            print(detections)
             if not detections:
                 #In case object detection missed the object, give it another chance (5 chances, actually)
                 if self.trackers is not None and self.timesMissed < 15:
@@ -85,25 +93,16 @@ class detector:
 
             self.trackers = []
 
-            # indexes = cv2.dnn.NMSBoxes(boxes, confidences, 0.7, 0.6)
-            # for i in range(len(boxes)):
-            #     if i in indexes:
-            #         label = 'Test' + str(confidences[i])
-            #         box = [boxes[i][0], boxes[i][1], boxes[i][0] + boxes[i][2], boxes[i][1] + boxes[i][3]]
-            #         color = self.objColor[3]
-            #         self.startTracker(frame, box, label, color)
-            #         frame = self.updateFrame(frame, box, label, color)
-
             for detection in detections:
-                label = str(detection['confidence'])
+                label = ""
                 box   = detection['box']
                 color = self.objColor
                 self.startTracker(frame, box, label, color)
                 frame = self.updateFrame(frame, box, label, color)
-            # self.writeFrame(frame, fps)
+            self.writeFrame(frame, fps, flag)
             return frame
         frame = self.updateTrackers(frame)
-        # self.writeFrame(frame, fps)
+        self.writeFrame(frame, fps, False)
         return frame
 
     def updateFrame(self, frame, box, label, color):
@@ -116,10 +115,7 @@ class detector:
         return frame
     
 
-    def writeFrame(self, frame, fps):
-        """Write a frame to a file. If there is no file handler, creates new one.
-          File will be located in video/{camName}/{date}/{time}.avi
-        """
+    def writeFrame(self, frame, fps, flag):
         nowDate = datetime.now().strftime("%Y-%m-%d")
         nowTime = datetime.now().strftime("%H-%M-%S")
         if self.writer is None:
@@ -128,7 +124,8 @@ class detector:
             (h, w) = frame.shape[:2]
             self.writer = cv2.VideoWriter('F:/DoAn/data_video/' + nowDate + '/ai-' + nowTime + '.mp4',self.fourcc, fps, (w, h), True)
             try:
-                requests.get('http://localhost:8000/api/video?name=ai-{}.mp4'.format(nowTime))
+                print('http://localhost:8000/api/video?name=ai-{}.mp4&flag={}'.format(nowTime, str(flag)))
+                requests.get('http://localhost:8000/api/video?name=ai-{}.mp4&flag={}'.format(nowTime, str(flag)))
             except:
                 print("Cannot connect to server")
         self.writer.write(frame)
@@ -160,8 +157,8 @@ class detector:
         classes = ['Thanh']
         layer_names = self.net.getLayerNames()
         output_layers = [layer_names[i - 1] for i in self.net.getUnconnectedOutLayers()]
-        colors = np.random.uniform(0, 255, size=(len(classes), 3))
-
+        minscore = 0.28
+        minindex = -1
         (h, w) = frame.shape[:2]
         mean   = cv2.mean(frame)
 
@@ -198,8 +195,26 @@ class detector:
         for i in indices:
             x, y, width, height = boxes[i]
             box = [x, y, int(x) + int(width), int(y) + int(height)]
+            # extract the face
+            face = frame[y:int(y) + int(height), x:int(x) + int(width)]
+            # resize pixels to the model size
+            image = Image.fromarray(face)
+            image = image.resize((224, 224))
+            face_array = np.asarray(image)
+            samples = np.asarray([face_array], 'float32')
+            samples = preprocess_input(samples, version=2)
+            yhat = self.FNModel.predict(samples)
+            if(len(yhat) > 0):
+                for index in range(len(self.embeddings)):
+                    score = cosine(self.embeddings[index], yhat[0])
+                    if score < minscore:
+                        minscore = score
+                        minindex = index
+                minindex = -1 if minscore > 0.28 else minscore 
+
             detected.append({'box':  box, 'confidence': float(confidences[i]), 'idx': 3})
-            return detected
+        flag = False if minindex == -1 else True
+        return detected, flag
 
 
 

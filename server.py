@@ -9,8 +9,10 @@ import cv2
 import time
 import threading
 import configparser
-from flask import Flask, Response
+from flask import Flask, Response, jsonify, request
 from werkzeug.serving import run_simple
+import base64
+import json
 
 app = Flask(__name__)
 app.debug = True
@@ -33,8 +35,8 @@ def runDetectionsOnCam(url, camName):
     global config
 
     newFrame = None
-    detector  = detect2.detector(camName, config.get('model', 'protocol'), config.get('model', 'model'))
-    cam = webcam.threadCamReader(url)
+    detector  = detect.detector(camName, config.get('model', 'protocol'), config.get('model', 'model'))
+    cam = webcam.threadCamReader(0)
     cam.start()
     sender = imagezmq.ImageSender(connect_to='tcp://*:5551' ,block = False)    
     readFrameID = None
